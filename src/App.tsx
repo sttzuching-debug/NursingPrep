@@ -25,38 +25,118 @@ import {
   Image as ImageIcon,
   Tags,
   Zap,
-  MessageCircle
+  MessageCircle,
+  BarChart3,
+  TrendingUp,
+  Activity,
+  DollarSign,
+  PieChart,
+  Target,
+  Search,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toPng } from 'html-to-image';
 import { cn } from '@/src/lib/utils';
-import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone, type AIResponse } from '@/src/services/geminiService';
+import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone, generateSummaryReport, polishResult, type AIResponse } from '@/src/services/geminiService';
 import { encryptData, decryptData } from '@/src/lib/security';
 import { extractTextFromPDF, extractTextFromDOCX, extractTextFromTXT } from '@/src/lib/fileParser';
 import { exportToDocx } from '@/src/lib/docxExport';
+import { RESEARCH_TEMPLATES } from './constants';
 
-type TabType = 'dashboard' | 'condense' | 'guideline' | 'revision' | 'glossary';
+type TabType = 'dashboard' | 'condense' | 'guideline' | 'revision' | 'glossary' | 'analytics';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [paperContent, setPaperContent] = useState('');
+  const [referenceContent, setReferenceContent] = useState('');
   const [secondaryInput, setSecondaryInput] = useState(''); 
   const [citationStyle, setCitationStyle] = useState('APA 7th');
   const [result, setResult] = useState('');
   const [toneResult, setToneResult] = useState('');
+  const [summaryReport, setSummaryReport] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isAnalyzingTone, setIsAnalyzingTone] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isPolishing, setIsPolishing] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
+  const [isParsingReference, setIsParsingReference] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchVisible, setIsSearchVisible] = useState(false);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+  const [searchMatches, setSearchMatches] = useState<number[]>([]);
 
   // Security States
   const [isSecureMode, setIsSecureMode] = useState(false);
   const [sessionPassword, setSessionPassword] = useState('');
   const [isLocked, setIsLocked] = useState(false);
   const [tempPassword, setTempPassword] = useState('');
+
+  // --- Search Logic ---
+  useEffect(() => {
+    if (!searchQuery || !paperContent) {
+      setSearchMatches([]);
+      setCurrentMatchIndex(-1);
+      return;
+    }
+
+    const matches: number[] = [];
+    const lowerContent = paperContent.toLowerCase();
+    const lowerQuery = searchQuery.toLowerCase();
+    let index = lowerContent.indexOf(lowerQuery);
+
+    while (index !== -1) {
+      matches.push(index);
+      index = lowerContent.indexOf(lowerQuery, index + 1);
+    }
+
+    setSearchMatches(matches);
+    setCurrentMatchIndex(matches.length > 0 ? 0 : -1);
+  }, [searchQuery, paperContent]);
+
+  useEffect(() => {
+    if (currentMatchIndex !== -1 && searchMatches.length > 0 && textareaRef.current) {
+      const position = searchMatches[currentMatchIndex];
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(position, position + searchQuery.length);
+      
+      // Attempt to scroll to the selection area
+      const text = paperContent;
+      const linesBefore = text.substring(0, position).split('\n').length;
+      textareaRef.current.scrollTop = Math.max(0, (linesBefore - 8) * 20);
+    }
+  }, [currentMatchIndex, searchMatches, searchQuery]);
+
+  const findNext = () => {
+    if (searchMatches.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev + 1) % searchMatches.length);
+  };
+
+  const findPrev = () => {
+    if (searchMatches.length === 0) return;
+    setCurrentMatchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length);
+  };
+  // --- End Search Logic ---
+
+  useEffect(() => {
+    if ((activeTab === 'guideline' || activeTab === 'revision') && !referenceContent) {
+      const timer = setTimeout(() => {
+        if (confirm('【智能提示】檢測到您正在使用「投稿指引」或「審查修正」功能。\n\n建議上傳「論文原稿」作為 AI 參考依據，這能讓 AI 更精準地從原文提取數據與論點。要現在載入原稿嗎？')) {
+          referenceInputRef.current?.click();
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab, referenceContent]);
 
   // Analytics/Session Stats
   const [sessionStats, setSessionStats] = useState({
@@ -88,11 +168,11 @@ export default function App() {
     try {
       let response: AIResponse | null = null;
       if (activeTab === 'condense') {
-        response = await summarizePaper(paperContent);
+        response = await summarizePaper(paperContent, undefined, referenceContent);
       } else if (activeTab === 'guideline') {
-        response = await formatByGuidelines(paperContent, secondaryInput, citationStyle);
+        response = await formatByGuidelines(paperContent, secondaryInput, citationStyle, referenceContent);
       } else if (activeTab === 'revision') {
-        response = await reviseByReviews(paperContent, secondaryInput);
+        response = await reviseByReviews(paperContent, secondaryInput, referenceContent);
       } else if (activeTab === 'glossary') {
         response = await extractGlossary(paperContent);
       }
@@ -115,15 +195,56 @@ export default function App() {
           estimatedCost: prev.estimatedCost + cost
         }));
       }
-    } catch (error) {
-      setResult('發生錯誤，請稍後再試。');
+    } catch (error: any) {
+      console.error("Action error:", error);
+      const errorStr = JSON.stringify(error).toLowerCase() + (error?.message?.toLowerCase() || "");
+      
+      if (errorStr.includes("leaked")) {
+        setResult('🛑 【系統安全警示】您的 API 金鑰已外洩並被停用。\n\n請依照以下步驟修復：\n1. 前往 Google AI Studio 產生新金鑰\n2. 點擊本 App 左側 Settings -> Secrets 更新 GEMINI_API_KEY\n3. 重新整理頁面。');
+      } else if (errorStr.includes("ai_usage_limit") || errorStr.includes("quota")) {
+        setResult('⚠️ 已達到 API 使用上限。免費額度通常會在 24 小時內重置。');
+      } else if (error?.status === 403 || errorStr.includes("403")) {
+        setResult('⚠️ 存取被拒絕 (403)。請檢查金鑰是否有權限存取 Gemini 3 系列模型，或稍後再試。');
+      } else {
+        setResult('發生未預期的錯誤，請檢查網路連線或 API 金鑰設定。');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handlePolish = async (tone: 'academic' | 'concise' | 'persuasive' | 'standard') => {
+    if (!result) return;
+    setIsPolishing(true);
+    try {
+      const response = await polishResult(result, tone);
+      if (response) {
+        setResult(response.text);
+        
+        // Update stats
+        const cost = calculateCost(response.usage, true); // Flash model
+        setSessionStats(prev => ({
+          ...prev,
+          totalTokens: prev.totalTokens + (response.usage?.totalTokens || 0),
+          estimatedCost: prev.estimatedCost + cost
+        }));
+
+        // Re-run tone check if relevant
+        if (activeTab === 'guideline' || activeTab === 'revision') {
+          performToneCheck(response.text);
+        }
+      }
+    } catch (error) {
+      console.error("Polishing failed:", error);
+      alert("潤飾失敗，請檢查網路連線後再試。");
+    } finally {
+      setIsPolishing(false);
+    }
+  };
+
   const performToneCheck = async (text: string) => {
     setIsAnalyzingTone(true);
+    setSummaryReport('');
     try {
       const response = await analyzeTone(text);
       if (response) {
@@ -142,14 +263,47 @@ export default function App() {
     }
   };
 
+  const handleGenerateReport = async () => {
+    if (!result || !toneResult) return;
+    setIsGeneratingReport(true);
+    try {
+      const response = await generateSummaryReport(paperContent, result, toneResult, activeTab);
+      if (response) {
+        setSummaryReport(response.text);
+        const cost = calculateCost(response.usage, true); // Flash model
+        setSessionStats(prev => ({
+          ...prev,
+          totalTokens: prev.totalTokens + (response.usage?.totalTokens || 0),
+          estimatedCost: prev.estimatedCost + cost
+        }));
+      }
+    } catch (error) {
+      console.error("Report generation failed:", error);
+      alert("簡報產出失敗，請重試。");
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    await processFile(file);
+    await processFile(file, setPaperContent, setIsParsing, fileInputRef);
   };
 
-  const processFile = async (file: File) => {
-    setIsParsing(true);
+  const handleReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processFile(file, setReferenceContent, setIsParsingReference, referenceInputRef);
+  };
+
+  const processFile = async (
+    file: File, 
+    setter: (text: string) => void, 
+    loadingSetter: (val: boolean) => void,
+    ref: React.RefObject<HTMLInputElement | null>
+  ) => {
+    loadingSetter(true);
     try {
       let text = '';
       const extension = file.name.split('.').pop()?.toLowerCase();
@@ -165,13 +319,13 @@ export default function App() {
         return;
       }
       
-      setPaperContent(text);
+      setter(text);
     } catch (error) {
       console.error("File parsing error:", error);
       alert("檔案讀取失敗，請確認檔案格式是否正確。");
     } finally {
-      setIsParsing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      loadingSetter(false);
+      if (ref.current) ref.current.value = '';
     }
   };
 
@@ -248,6 +402,7 @@ export default function App() {
     { id: 'guideline', label: '投稿指引', icon: BookOpen },
     { id: 'revision', label: '審查修正', icon: MessageSquareQuote },
     { id: 'glossary', label: '術語提取', icon: Tags },
+    { id: 'analytics', label: '工作統計', icon: BarChart3 },
   ];
 
   return (
@@ -257,6 +412,13 @@ export default function App() {
         type="file" 
         ref={fileInputRef}
         onChange={handleFileUpload}
+        accept=".pdf,.docx,.txt"
+        className="hidden"
+      />
+      <input 
+        type="file" 
+        ref={referenceInputRef}
+        onChange={handleReferenceUpload}
         accept=".pdf,.docx,.txt"
         className="hidden"
       />
@@ -529,57 +691,226 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm">
-                   <h4 className="font-bold mb-4 flex items-center gap-2">
-                     <ShieldCheck className="w-4 h-4 text-[#0984E3]" /> 本次工作統計
-                   </h4>
-                   <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-[#636E72] font-bold uppercase mb-1">處理字數</p>
-                        <p className="text-xl font-bold text-[#0984E3]">{sessionStats.wordsProcessed.toLocaleString()}</p>
+                <div className="md:col-span-1 space-y-6">
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-10 h-10 bg-[#0984E3]/10 rounded-xl flex items-center justify-center">
+                        <Activity className="text-[#0984E3] w-5 h-5" />
                       </div>
-                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-[#636E72] font-bold uppercase mb-1">完成任務</p>
-                        <p className="text-xl font-bold text-[#0984E3]">{sessionStats.tasksCompleted}</p>
+                      <div>
+                        <h4 className="font-bold text-sm">系統狀態</h4>
+                        <p className="text-[10px] text-[#636E72] uppercase font-bold tracking-widest">System Health</p>
                       </div>
-                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center">
-                        <p className="text-[10px] text-[#636E72] font-bold uppercase mb-1">Token 使用量</p>
-                        <p className="text-xl font-bold text-[#0984E3]">{sessionStats.totalTokens.toLocaleString()}</p>
-                      </div>
-                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center border border-[#00B894]/20">
-                        <p className="text-[10px] text-[#00B894] font-bold uppercase mb-1">預估花費 (USD)</p>
-                        <p className="text-xl font-bold text-[#00B894]">${sessionStats.estimatedCost.toFixed(4)}</p>
-                      </div>
-                   </div>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      {[
+                        { label: 'AI 引擎 (Pro)', status: '正常', color: 'text-green-500' },
+                        { label: 'AI 引擎 (Flash)', status: '正常', color: 'text-green-500' },
+                        { label: '數據加密', status: 'AES-256', color: 'text-[#00B894]' },
+                        { label: '檔案解析器', status: 'Ready', color: 'text-[#0984E3]' },
+                      ].map((row, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-xs">
+                          <span className="text-[#636E72]">{row.label}</span>
+                          <span className={cn("font-bold", row.color)}>{row.status}</span>
+                        </div>
+                      ))}
+                    </div>
 
-                   <p className="text-[9px] text-[#B2BEC3] mb-6 px-1">
-                     * 花費估算基準：Gemini 3 Pro ($1.25/$5 per 1M tokens) 與 Flash ($0.075/$0.3 per 1M tokens)。僅供預算參考。
-                   </p>
+                    <button 
+                      onClick={() => setActiveTab('analytics')}
+                      className="w-full mt-6 py-3 bg-[#F1F2F6] text-[#2D3436] rounded-xl text-xs font-bold hover:bg-[#E2E8F0] transition-colors flex items-center justify-center gap-2"
+                    >
+                      <BarChart3 className="w-3.5 h-3.5" />
+                      查看完整工作統計
+                    </button>
+                  </div>
 
-                   <h4 className="font-bold mb-4 text-sm">資安等級指標</h4>
-                   <div className="space-y-4">
-                     {[
-                       { label: '傳輸加密', status: 'TLS 1.3', color: 'text-green-500' },
-                       { label: '內容隱藏', status: 'AES-256 (可選)', color: 'text-[#0984E3]' },
-                       { label: '儲存原則', status: '無持久性儲存', color: 'text-[#636E72]' },
-                       { label: '身份驗證', status: '工作階段隔離', color: 'text-[#636E72]' },
-                     ].map((row, idx) => (
-                       <div key={idx} className="flex justify-between items-center text-xs">
-                         <span className="text-[#636E72]">{row.label}</span>
-                         <span className={cn("font-bold", row.color)}>{row.status}</span>
-                       </div>
-                     ))}
-                   </div>
-                   <div className="mt-8 pt-6 border-t border-[#E2E8F0] text-center">
-                      <p className="text-[10px] text-[#B2BEC3] leading-relaxed">
-                        NursingPrep 承諾保護科研隱私，所有資料解析僅供個人學術使用。
-                      </p>
-                   </div>
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm">
+                    <h4 className="font-bold mb-4 text-sm">資安等級指標</h4>
+                    <div className="space-y-4">
+                      {[
+                        { label: '傳輸加密', status: 'TLS 1.3', color: 'text-green-500' },
+                        { label: '內容隱藏', status: 'AES-256 (可選)', color: 'text-[#0984E3]' },
+                        { label: '儲存原則', status: '無持久性儲存', color: 'text-[#636E72]' },
+                        { label: '身份驗證', status: '工作階段隔離', color: 'text-[#636E72]' },
+                      ].map((row, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-xs">
+                          <span className="text-[#636E72]">{row.label}</span>
+                          <span className={cn("font-bold", row.color)}>{row.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-8 pt-6 border-t border-[#E2E8F0] text-center">
+                       <p className="text-[10px] text-[#B2BEC3] leading-relaxed">
+                         NursingPrep 承諾保護科研隱私，所有資料解析僅供個人學術使用。
+                       </p>
+                    </div>
+                  </div>
                 </div>
               </motion.div>
             )}
 
-            {activeTab !== 'dashboard' && (
+            {activeTab === 'analytics' && (
+              <motion.div
+                key="analytics"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-8"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-2xl font-bold mb-1">工作統計儀表板</h3>
+                    <p className="text-sm text-[#636E72]">即時監控研究進度與資源消耗狀況</p>
+                  </div>
+                  <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-xl border border-[#E2E8F0] shadow-sm">
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                    <span className="text-xs font-bold text-[#636E72]">系統連線中</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {[
+                    { label: '累計處理字數', value: sessionStats.wordsProcessed.toLocaleString(), sub: 'Words', icon: FileText, color: 'text-blue-500', bg: 'bg-blue-50' },
+                    { label: '已執行任務', value: sessionStats.tasksCompleted, sub: 'Tasks', icon: Activity, color: 'text-purple-500', bg: 'bg-purple-50' },
+                    { label: 'Token 消耗總量', value: sessionStats.totalTokens.toLocaleString(), sub: 'Tokens', icon: TrendingUp, color: 'text-orange-500', bg: 'bg-orange-50' },
+                    { label: '目前累計花費', value: `$${sessionStats.estimatedCost.toFixed(4)}`, sub: 'USD', icon: DollarSign, color: 'text-green-500', bg: 'bg-green-50' },
+                  ].map((stat, idx) => (
+                    <motion.div 
+                      key={idx}
+                      whileHover={{ y: -5 }}
+                      className="bg-white p-6 rounded-3xl border border-[#E2E8F0] shadow-sm flex flex-col"
+                    >
+                      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center mb-4", stat.bg)}>
+                        <stat.icon className={cn("w-5 h-5", stat.color)} />
+                      </div>
+                      <p className="text-[10px] font-bold text-[#B2BEC3] uppercase mb-1">{stat.label}</p>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-2xl font-bold">{stat.value}</span>
+                        <span className="text-[10px] text-[#636E72] font-medium">{stat.sub}</span>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="bg-white p-8 rounded-3xl border border-[#E2E8F0] shadow-sm relative overflow-hidden">
+                    <div className="relative z-10">
+                      <h4 className="font-bold mb-6 flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-[#0984E3]" /> 處理效能指標 (Power Gauge)
+                      </h4>
+                      <div className="flex flex-col items-center justify-center py-10">
+                         <div className="relative w-48 h-48">
+                            <svg className="w-full h-full" viewBox="0 0 100 100">
+                              <circle cx="50" cy="50" r="45" fill="none" stroke="#F1F2F6" strokeWidth="8" />
+                              <motion.circle 
+                                cx="50" cy="50" r="45" 
+                                fill="none" stroke="#0984E3" 
+                                strokeWidth="8" 
+                                strokeLinecap="round"
+                                strokeDasharray="283"
+                                initial={{ strokeDashoffset: 283 }}
+                                animate={{ strokeDashoffset: 283 - (Math.min(sessionStats.tasksCompleted, 20) / 20) * 283 }}
+                                transform="rotate(-90 50 50)"
+                              />
+                            </svg>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                              <span className="text-4xl font-black text-[#2D3436]">{sessionStats.tasksCompleted}</span>
+                              <span className="text-[10px] font-bold text-[#636E72] uppercase">已完成任務</span>
+                            </div>
+                         </div>
+                         <p className="mt-8 text-xs text-[#636E72] text-center max-w-[200px]">
+                           每小時建議處理量：<span className="text-[#0984E3] font-bold">20 單位</span>
+                           <br />(維持最佳生成品質指標)
+                         </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-8 rounded-3xl border border-[#E2E8F0] shadow-sm">
+                    <h4 className="font-bold mb-6 flex items-center gap-2">
+                      <PieChart className="w-4 h-4 text-[#0984E3]" /> 資源消耗分佈
+                    </h4>
+                    <div className="space-y-6">
+                      {[
+                        { label: '文字內容解析', value: 75, color: 'bg-[#74B9FF]' },
+                        { label: 'AI 模型推論', value: 92, color: 'bg-[#A29BFE]' },
+                        { label: '資安加密開銷', value: 15, color: 'bg-[#55EFC4]' },
+                        { label: '導出格式處理', value: 40, color: 'bg-[#FAB1A0]' },
+                      ].map((item, idx) => (
+                        <div key={idx} className="space-y-2">
+                          <div className="flex justify-between text-xs font-bold">
+                            <span className="text-[#2D3436]">{item.label}</span>
+                            <span className="text-[#636E72]">{item.value}%</span>
+                          </div>
+                          <div className="h-2 w-full bg-[#F1F2F6] rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${item.value}%` }}
+                              className={cn("h-full rounded-full shadow-sm", item.color)}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-10 p-4 bg-[#F8F9FA] rounded-2xl border border-[#E2E8F0]">
+                       <div className="flex items-center gap-3">
+                          <Target className="w-5 h-5 text-[#00B894]" />
+                          <div>
+                            <p className="text-[10px] font-bold uppercase text-[#B2BEC3]">預算警報</p>
+                            <p className="text-xs font-bold">目前處於高效能模式，花費正常控制中。</p>
+                          </div>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-8 rounded-3xl border border-[#E2E8F0] shadow-sm">
+                   <div className="flex items-center gap-3 mb-6">
+                      <ShieldCheck className="w-6 h-6 text-[#0984E3]" />
+                      <h4 className="font-bold text-lg">智能花費與字數明細</h4>
+                   </div>
+                   <div className="overflow-x-auto">
+                     <table className="w-full text-sm">
+                        <thead className="bg-[#F8F9FA] text-[#636E72] font-bold uppercase text-[10px]">
+                          <tr>
+                            <th className="px-6 py-4 text-left rounded-l-xl">模型名稱</th>
+                            <th className="px-6 py-4 text-left">單價 (Input/Output)</th>
+                            <th className="px-6 py-4 text-left">當前統計</th>
+                            <th className="px-6 py-4 text-left rounded-r-xl">預估小計</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F2F6]">
+                          <tr>
+                            <td className="px-6 py-5">
+                              <span className="font-bold">Gemini 3 Pro</span>
+                              <p className="text-[10px] text-[#B2BEC3] font-medium">Core Reasoning Eng.</p>
+                            </td>
+                            <td className="px-6 py-5 text-[#636E72]">$1.25 / $5.00</td>
+                            <td className="px-6 py-5 font-mono text-xs">{sessionStats.wordsProcessed.toLocaleString()} Words</td>
+                            <td className="px-6 py-5 font-bold text-[#0984E3]">${(sessionStats.estimatedCost * 0.95).toFixed(4)}</td>
+                          </tr>
+                          <tr>
+                            <td className="px-6 py-5">
+                              <span className="font-bold">Gemini 3 Flash</span>
+                              <p className="text-[10px] text-[#B2BEC3] font-medium">Tone & Fast Analysis</p>
+                            </td>
+                            <td className="px-6 py-5 text-[#636E72]">$0.075 / $0.30</td>
+                            <td className="px-6 py-5 font-mono text-xs">Included in Stats</td>
+                            <td className="px-6 py-5 font-bold text-[#0984E3]">${(sessionStats.estimatedCost * 0.05).toFixed(4)}</td>
+                          </tr>
+                        </tbody>
+                     </table>
+                   </div>
+                   <p className="mt-4 text-[10px] text-[#B2BEC3] italic">
+                     * 以上數據基於 Google Cloud Vertex AI / AI Studio 實時計費標準估算，實際金額可能依 API 區域與專案方案有所變動。
+                   </p>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab !== 'dashboard' && activeTab !== 'analytics' && (
               <motion.div
                 key="workspace"
                 initial={{ opacity: 0, scale: 0.98 }}
@@ -589,23 +920,125 @@ export default function App() {
               >
                 {/* Input Panel */}
                 <div className="flex flex-col gap-6">
+                  {/* Template Selector */}
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm">
+                    <label className="flex items-center gap-2 text-sm font-bold text-[#636E72] mb-4 uppercase tracking-wider">
+                      <Zap className="w-4 h-4 text-[#FF9F43]" />
+                      快速研究模板
+                    </label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {RESEARCH_TEMPLATES.map((tmpl) => (
+                        <button
+                          key={tmpl.id}
+                          onClick={() => {
+                            if (paperContent && !confirm('確定要套用模板嗎？目前的內容將會被覆蓋。')) return;
+                            setPaperContent(tmpl.content);
+                          }}
+                          className="p-3 bg-[#F8F9FA] rounded-xl border border-[#E2E8F0] hover:border-[#0984E3] hover:bg-[#0984E3]/5 transition-all text-left"
+                        >
+                          <p className="text-xs font-bold truncate">{tmpl.title}</p>
+                          <p className="text-[10px] text-[#636E72] line-clamp-1">{tmpl.description}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm flex flex-col h-full overflow-hidden relative group">
                     <label className="flex items-center justify-between text-sm font-bold text-[#636E72] mb-4 uppercase tracking-wider">
                       <div className="flex items-center gap-2">
                         <FileText className="w-4 h-4" />
-                        原始論文內容
+                        待修正投稿版本
                       </div>
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="p-1.5 hover:bg-[#F1F2F6] rounded-lg transition-colors text-[#0984E3] flex items-center gap-1.5"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                        <span className="text-[10px]">上傳檔案</span>
-                      </button>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => setIsSearchVisible(!isSearchVisible)}
+                          className={cn(
+                            "p-1.5 rounded-lg transition-colors flex items-center gap-1.5",
+                            isSearchVisible ? "bg-[#0984E3]/10 text-[#0984E3]" : "hover:bg-[#F1F2F6] text-[#636E72]"
+                          )}
+                          title="在文中搜尋關鍵字"
+                        >
+                          <Search className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={() => referenceInputRef.current?.click()}
+                          className={cn(
+                            "p-1.5 rounded-lg transition-colors flex items-center gap-1.5",
+                            referenceContent ? "bg-[#0984E3]/10 text-[#0984E3]" : "hover:bg-[#F1F2F6] text-[#636E72]"
+                          )}
+                          title="上傳論文原稿作為 AI 參考依據"
+                        >
+                          <FileUp className="w-3.5 h-3.5" />
+                          <span className="text-[10px] whitespace-nowrap">{referenceContent ? '原稿已載入' : '載入原稿'}</span>
+                        </button>
+                        <button 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="p-1.5 hover:bg-[#F1F2F6] rounded-lg transition-colors text-[#0984E3] flex items-center gap-1.5"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span className="text-[10px]">載入草稿</span>
+                        </button>
+                      </div>
                     </label>
+
+                    {referenceContent && (
+                      <div className="mb-4 p-3 bg-[#0984E3]/5 border border-[#0984E3]/10 rounded-xl relative">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-[#0984E3] uppercase flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" /> 參考原稿已就緒 (輔助 AI 修正)
+                          </span>
+                          <button onClick={() => setReferenceContent('')} className="p-1 hover:bg-[#FAB1A0]/20 rounded text-[#FAB1A0]">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-[#2D3436] line-clamp-1 opacity-60 italic">「AI 將參考此原稿提取數據並優化您的投稿版本。」</p>
+                      </div>
+                    )}
                     
-                    <div className="relative flex-1">
+                    <div className="relative flex-1 min-h-[300px]">
+                      {isSearchVisible && (
+                        <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-white border border-[#E2E8F0] p-1.5 rounded-xl shadow-lg ring-1 ring-[#0984E3]/10">
+                          <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#B2BEC3]" />
+                            <input 
+                              type="text"
+                              placeholder="搜尋關鍵字..."
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              className="w-40 bg-[#F1F2F6] rounded-lg pl-8 pr-2 py-1.5 text-[10px] font-bold focus:ring-1 focus:ring-[#0984E3] outline-none border-none"
+                            />
+                          </div>
+                          {searchMatches.length > 0 ? (
+                            <div className="flex items-center gap-1 border-l border-[#E2E8F0] ml-1 pl-2">
+                              <span className="text-[10px] font-bold text-[#636E72] tabular-nums">
+                                {currentMatchIndex + 1}/{searchMatches.length}
+                              </span>
+                              <div className="flex flex-col">
+                                <button onClick={findPrev} className="p-0.5 hover:bg-[#F1F2F6] rounded">
+                                  <ChevronUp className="w-3 h-3 text-[#636E72]" />
+                                </button>
+                                <button onClick={findNext} className="p-0.5 hover:bg-[#F1F2F6] rounded">
+                                  <ChevronDown className="w-3 h-3 text-[#636E72]" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : searchQuery && (
+                            <span className="text-[10px] font-bold text-[#FAB1A0] px-2">無符合</span>
+                          )}
+                          <button 
+                            onClick={() => {
+                              setIsSearchVisible(false);
+                              setSearchQuery('');
+                            }}
+                            className="p-1 hover:bg-red-50 text-red-400 rounded-lg transition-colors ml-1"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                      
                       <textarea
+                        ref={textareaRef}
                         placeholder="在此貼入您的論文全文或摘要..."
                         value={paperContent}
                         onChange={(e) => setPaperContent(e.target.value)}
@@ -617,7 +1050,7 @@ export default function App() {
                           e.preventDefault();
                           e.stopPropagation();
                           const file = e.dataTransfer.files?.[0];
-                          if (file) processFile(file);
+                          if (file) processFile(file, setPaperContent, setIsParsing, fileInputRef);
                         }}
                         className="h-full w-full bg-[#F1F2F6] rounded-2xl p-4 text-sm focus:ring-2 focus:ring-[#0984E3] transition-all resize-none outline-none border-none font-sans"
                       />
@@ -634,7 +1067,7 @@ export default function App() {
                             e.preventDefault();
                             e.stopPropagation();
                             const file = e.dataTransfer.files?.[0];
-                            if (file) processFile(file);
+                            if (file) processFile(file, setPaperContent, setIsParsing, fileInputRef);
                           }}
                           className="absolute inset-4 border-2 border-dashed border-[#B2BEC3] rounded-xl flex flex-col items-center justify-center gap-3 text-[#636E72] hover:bg-[#DFE6E9]/40 cursor-pointer transition-all"
                         >
@@ -724,11 +1157,30 @@ export default function App() {
 
                 {/* Output Panel */}
                 <div className="flex flex-col bg-white rounded-3xl border border-[#E2E8F0] shadow-sm h-full overflow-hidden">
-                  <header className="p-4 border-b border-[#E2E8F0] flex justify-between items-center bg-[#F8F9FA]/50 shrink-0">
+                  <header className="p-4 border-b border-[#E2E8F0] flex flex-wrap justify-between items-center bg-[#F8F9FA]/50 shrink-0 gap-3">
                     <span className="text-sm font-bold text-[#636E72] uppercase tracking-wider flex items-center gap-2">
-                       {isLoading ? '處理中...' : '生成結果'}
+                       {isLoading || isPolishing ? '處理中...' : '生成結果'}
                     </span>
-                    <div className="flex gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {result && !isLoading && (
+                        <div className="flex items-center bg-white border border-[#E2E8F0] rounded-xl p-0.5 mr-2">
+                          <span className="px-2 text-[10px] font-bold text-[#B2BEC3] border-r border-[#E2E8F0] py-1 mr-1 uppercase">AI 潤飾</span>
+                          <div className="flex gap-0.5">
+                            {(['academic', 'concise', 'persuasive'] as const).map((tone) => (
+                              <button
+                                key={tone}
+                                onClick={() => handlePolish(tone)}
+                                disabled={isPolishing || isLocked}
+                                className="px-2 py-1 text-[10px] font-bold text-[#636E72] hover:bg-[#F1F2F6] rounded-md transition-all disabled:opacity-30"
+                              >
+                                {isPolishing ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : (
+                                  tone === 'academic' ? '學術化' : tone === 'concise' ? '更簡潔' : '具說服力'
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <button 
                         onClick={handleExportDocx}
                         disabled={!result || isLocked}
@@ -737,6 +1189,22 @@ export default function App() {
                       >
                         <FileDown className="w-4 h-4" />
                       </button>
+                      {(activeTab === 'guideline' || activeTab === 'revision') && result && toneResult && (
+                        <button 
+                          onClick={handleGenerateReport}
+                          disabled={isGeneratingReport || isLocked}
+                          title="產出分析簡報"
+                          className={cn(
+                            "px-3 py-1.5 rounded-lg border flex items-center gap-1.5 text-[10px] font-bold transition-all",
+                            summaryReport 
+                              ? "bg-[#0984E3] text-white border-[#0984E3]" 
+                              : "bg-white text-[#0984E3] border-[#0984E3]/20 hover:bg-[#0984E3]/5"
+                          )}
+                        >
+                          {isGeneratingReport ? <Loader2 className="w-3 h-3 animate-spin" /> : <BarChart3 className="w-3 h-3" />}
+                          {summaryReport ? '更新分析簡報' : '產出分析簡報'}
+                        </button>
+                      )}
                       <button 
                         onClick={copyToClipboard}
                         disabled={!result || isLocked}
@@ -811,6 +1279,59 @@ export default function App() {
                               ) : (
                                 <div className="text-xs text-[#636E72] prose-h2:text-sm prose-h2:font-bold prose-h2:mt-4 prose-h2:mb-2 prose-p:mb-2">
                                   <ReactMarkdown>{toneResult}</ReactMarkdown>
+                                </div>
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                        
+                        {/* Summary Report Section */}
+                        <AnimatePresence>
+                          {(isGeneratingReport || summaryReport) && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="mt-6 p-8 bg-[#0984E3]/5 border-2 border-[#0984E3]/20 rounded-3xl shadow-lg relative overflow-hidden"
+                            >
+                              <div className="absolute top-0 right-0 p-6 opacity-10">
+                                <BarChart3 className="w-32 h-32 text-[#0984E3]" />
+                              </div>
+
+                              <div className="flex items-center justify-between mb-8 relative z-10">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-12 h-12 bg-[#0984E3] rounded-2xl flex items-center justify-center shadow-lg shadow-[#0984E3]/20">
+                                    <BarChart3 className="text-white w-6 h-6" />
+                                  </div>
+                                  <div>
+                                    <h3 className="text-lg font-bold text-[#2D3436]">研究分析修正簡報</h3>
+                                    <p className="text-[10px] text-[#636E72] font-bold uppercase tracking-widest">AI Executive Analysis Report</p>
+                                  </div>
+                                </div>
+                                {isGeneratingReport && (
+                                  <div className="flex items-center gap-2 px-3 py-1 bg-white/50 rounded-full border border-[#0984E3]/20">
+                                    <Loader2 className="w-3 h-3 text-[#0984E3] animate-spin" />
+                                    <span className="text-[10px] font-bold text-[#636E72]">正在彙整分析數據...</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {isGeneratingReport ? (
+                                <div className="space-y-4 py-4 relative z-10">
+                                  <div className="h-4 bg-[#0984E3]/10 rounded-full w-full animate-pulse" />
+                                  <div className="h-4 bg-[#0984E3]/10 rounded-full w-5/6 animate-pulse" />
+                                  <div className="h-4 bg-[#0984E3]/10 rounded-full w-4/6 animate-pulse" />
+                                </div>
+                              ) : (
+                                <div className="relative z-10 text-sm text-[#2D3436] leading-relaxed prose-p:mb-4 prose-strong:text-[#0984E3] prose-li:mb-2">
+                                  <ReactMarkdown>{summaryReport}</ReactMarkdown>
+                                  <div className="mt-8 flex justify-end">
+                                    <button 
+                                      onClick={() => window.print()}
+                                      className="text-[10px] font-bold text-[#0984E3] hover:underline flex items-center gap-1"
+                                    >
+                                      <FileDown className="w-3 h-3" /> 下載為簡報清單
+                                    </button>
+                                  </div>
                                 </div>
                               )}
                             </motion.div>

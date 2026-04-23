@@ -24,22 +24,29 @@ function getAI() {
   return genAI;
 }
 
-export async function summarizePaper(paperText: string, targetLength?: string): Promise<AIResponse> {
+export async function summarizePaper(paperText: string, targetLength?: string, originalSource?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview"; // Use Pro for complex reasoning/summarization
   const prompt = `
     你是一位專業的護理期刊編輯。請將以下護理論文/論文摘要（或全文）濃縮成適合投稿至學術期刊的版本。
     
+    ${originalSource ? `參考原稿資訊：
+    [這份原稿是作者最初的底稿，請從中提取核心發現與關鍵論點，協助優化當前的工作版本。]
+    原稿內容摘要：
+    ${originalSource.substring(0, 3000)}... (省略過長內容)
+    ` : ''}
+
+    當前工作版本內容：
+    ${paperText}
+
     要求：
     1. 保持學術精確性與護理專業術語。
     2. 結構應包含：背景、目的、方法、結果、結論/建議（IMRAD格式）。
     3. ${targetLength ? `目標長度約為 ${targetLength} 字。` : '請濃縮成精華版本，刪除冗餘資訊。'}
     4. **特別注意：如果原文中包含數據表格，請務必精簡並以 Markdown 表格格式保留在「結果 (Results)」章節中。**
     5. 請使用繁體中文（除非原文為英文）。
-    
-    論文內容：
-    ${paperText}
-  `;
+    6. 若提供參考原稿，請確保當前版本的邏輯與原稿核心一致，但語氣更學術化。
+    `;
 
   try {
     const response = await ai.models.generateContent({
@@ -60,7 +67,7 @@ export async function summarizePaper(paperText: string, targetLength?: string): 
   }
 }
 
-export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string): Promise<AIResponse> {
+export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string, originalSource?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
@@ -68,10 +75,16 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
     
     ${citationStyle ? `特別要求：請使用「${citationStyle}」引用格式。` : ''}
     
+    ${originalSource ? `參考原稿資訊：
+    [請參考原稿中的核心精神與數據，確保修正後的投稿版本不會偏離研究初衷。]
+    原稿內容摘要：
+    ${originalSource.substring(0, 3000)}...
+    ` : ''}
+
     期刊指引內容：
     ${guidelines}
     
-    論文內容：
+    待修正論文內容：
     ${paperText}
     
     要求：
@@ -102,21 +115,27 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
   }
 }
 
-export async function reviseByReviews(paperText: string, reviewerComments: string): Promise<AIResponse> {
+export async function reviseByReviews(paperText: string, reviewerComments: string, originalSource?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
     你是一位經驗豐富的護理研究專家。請根據「審查者建議」對以下論文進行修正。
     
+    ${originalSource ? `參考原稿資訊：
+    [若審查建議涉及研究細節，請優先從此原稿中提取相關資訊來回覆與修正。]
+    原稿內容摘要：
+    ${originalSource.substring(0, 3000)}...
+    ` : ''}
+
     審查者建議：
     ${reviewerComments}
     
-    原始論文內容：
+    當前論文內容：
     ${paperText}
     
     要求：
     1. 針對每條建議進行內容修正。
-    2. 若建議提到邏輯不清或資料不足，請以專業護理知識輔助潤飾（若需補充資料，請用引號 [...] 提醒作者）。
+    2. 若建議提到邏輯不清或資料不足，請以專業護理知識輔助潤飾（若需補充資料，優先參考原稿；若無，請用引號 [...] 提醒作者）。
     3. 生成兩個部分：
        a. 修正後的論文全文。
        b. 點對點回覆審查意見的對照表 (Response to Reviewers Table)。
@@ -215,6 +234,93 @@ export async function analyzeTone(outputText: string): Promise<AIResponse> {
     };
   } catch (error) {
     console.error("Tone analysis error:", error);
+    throw error;
+  }
+}
+
+export async function generateSummaryReport(originalText: string, aiResult: string, toneAnalysis: string, taskType: string): Promise<AIResponse> {
+  const ai = getAI();
+  const model = "gemini-3-flash-preview"; 
+  const prompt = `
+    你是一位專業的學術顧問。請根據以下 AI 的分析與修正結果，為使用者產出一份「研究修正簡報 (Concise Analysis Report)」。
+    這份報告旨在讓使用者快速了解修改重點。
+    
+    任務類型：${taskType}
+    
+    1. 原始內容摘要：[簡述原始內容的核心]
+    2. 主要修正建議：[列出 3 個最關鍵的修改動作]
+    3. 語氣與專業度評估：[綜合語氣分析結果的關鍵結論]
+    4. 下一步建議：[建議使用者接下來應注意的 1-2 個細節]
+    
+    要求：
+    - 語氣簡潔、專業、具有指導性。
+    - 使用 Markdown 標記，適合在行動裝置或快速瀏覽時閱讀。
+    - 使用繁體中文。
+    
+    資料來源：
+    [AI 修正結果]: ${aiResult.substring(0, 3000)}
+    [語氣分析結論]: ${toneAnalysis.substring(0, 1000)}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
+  } catch (error) {
+    console.error("Summary report generation error:", error);
+    throw error;
+  }
+}
+
+export async function polishResult(content: string, tone: 'academic' | 'concise' | 'persuasive' | 'standard'): Promise<AIResponse> {
+  const ai = getAI();
+  const model = "gemini-3-flash-preview"; 
+  
+  const tonePrompts = {
+    academic: "請將以下內容調整為更具「學術化 (Academic)」的語氣。使用更精確的科學動詞、被動語態與嚴謹的句構，確保符合國際護理期刊的發布標準。",
+    concise: "請將以下內容調整為更「簡潔 (Concise)」的表達方式。去除贅字、冗長修飾與重複資訊，直接點出核心重點，適合字數限制嚴格的摘要。",
+    persuasive: "請將以下內容調整為更具「說服力 (Persuasive)」的語氣。強調研究的重要性、臨床應用價值與創新貢獻，增強對審稿人的吸引力。",
+    standard: "請對以下內容進行標準的學術潤飾。優化流暢度、修正字元錯誤並微調專業用語。"
+  };
+
+  const prompt = `
+    你是一位專業的學術編輯。
+    指令：${tonePrompts[tone]}
+    
+    待處理內容：
+    ${content}
+    
+    要求：
+    1. 僅回傳修正後的內容，不需要額外的解釋。
+    2. 保留原有的 Markdown 格式（如表格、標題、清單）。
+    3. 專業術語不可隨意更改含義。
+    4. 使用繁體中文。
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
+  } catch (error) {
+    console.error("Polishing error:", error);
     throw error;
   }
 }
