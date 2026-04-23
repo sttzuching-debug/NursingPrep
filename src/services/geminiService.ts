@@ -324,3 +324,54 @@ export async function polishResult(content: string, tone: 'academic' | 'concise'
     throw error;
   }
 }
+
+export async function searchJournalGuidelines(journalName: string): Promise<AIResponse & { sourceUrl?: string }> {
+  const ai = getAI();
+  const model = "gemini-3-flash-preview"; 
+  
+  const prompt = `
+    請使用 Google 搜尋尋找期刊「${journalName}」的官方「作者投稿指引 (Author Guidelines)」或「投稿須知 (Instructions for Authors)」。
+    
+    請從搜尋結果中提取以下關鍵資訊：
+    1. 格式要求（如：字數限制、摘要結構）。
+    2. 引用格式（如：APA, AMA, Vancouver）。
+    3. 投稿系統連結或官方指引頁面連結。
+    
+    你的回覆應包含：
+    - 期刊完整名稱
+    - 關鍵投稿規範摘要
+    - 官方指引連結
+    
+    要求：
+    - 嚴格遵守搜尋結果，不可造假或憑空想像。
+    - 若找不到確切指引，請老實說明。
+    - 使用繁體中文。
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }]
+      }
+    });
+
+    // Extracting source URL if available from grounding metadata
+    const groundMetadata = response.candidates?.[0]?.groundingMetadata;
+    const sourceUrl = groundMetadata?.searchEntryPoint?.renderedContent;
+
+    return {
+      text: response.text || "",
+      sourceUrl: sourceUrl,
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
+  } catch (error) {
+    console.error("Journal search error:", error);
+    throw error;
+  }
+}

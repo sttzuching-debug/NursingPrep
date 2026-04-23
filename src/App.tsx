@@ -41,7 +41,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toPng } from 'html-to-image';
 import { cn } from '@/src/lib/utils';
-import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone, generateSummaryReport, polishResult, type AIResponse } from '@/src/services/geminiService';
+import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone, generateSummaryReport, polishResult, searchJournalGuidelines, type AIResponse } from '@/src/services/geminiService';
 import { encryptData, decryptData } from '@/src/lib/security';
 import { extractTextFromPDF, extractTextFromDOCX, extractTextFromTXT } from '@/src/lib/fileParser';
 import { exportToDocx } from '@/src/lib/docxExport';
@@ -74,6 +74,11 @@ export default function App() {
   const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [searchMatches, setSearchMatches] = useState<number[]>([]);
+
+  // Journal Search State
+  const [journalQuery, setJournalQuery] = useState('');
+  const [journalResults, setJournalResults] = useState<{ text: string; sourceUrl?: string } | null>(null);
+  const [isSearchingJournal, setIsSearchingJournal] = useState(false);
 
   // Security States
   const [isSecureMode, setIsSecureMode] = useState(false);
@@ -239,6 +244,31 @@ export default function App() {
       alert("潤飾失敗，請檢查網路連線後再試。");
     } finally {
       setIsPolishing(false);
+    }
+  };
+
+  const handleJournalSearch = async () => {
+    if (!journalQuery) return;
+    setIsSearchingJournal(true);
+    setJournalResults(null);
+    try {
+      const response = await searchJournalGuidelines(journalQuery);
+      if (response) {
+        setJournalResults({ text: response.text, sourceUrl: response.sourceUrl });
+        
+        // Update stats (Flash model with search)
+        const cost = calculateCost(response.usage, true); 
+        setSessionStats(prev => ({
+          ...prev,
+          totalTokens: prev.totalTokens + (response.usage?.totalTokens || 0),
+          estimatedCost: prev.estimatedCost + cost
+        }));
+      }
+    } catch (error) {
+      console.error("Journal search failed:", error);
+      alert("期刊搜尋失敗，可能是網路連線問題，請稍後再試。");
+    } finally {
+      setIsSearchingJournal(false);
     }
   };
 
@@ -1127,6 +1157,75 @@ export default function App() {
                           </div>
                         )}
                       </div>
+
+                      {activeTab === 'guideline' && (
+                        <div className="mb-4">
+                          <div className="relative group/search">
+                            <input 
+                              type="text"
+                              placeholder="輸入期刊名稱自動搜尋指引 (如: International Journal of Nursing Studies)..."
+                              value={journalQuery}
+                              onChange={(e) => setJournalQuery(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && handleJournalSearch()}
+                              className="w-full bg-[#F8F9FA] border border-[#E2E8F0] rounded-xl pl-10 pr-24 py-2.5 text-xs focus:ring-2 focus:ring-[#0984E3] transition-all outline-none"
+                            />
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2">
+                              <Search className="w-4 h-4 text-[#B2BEC3]" />
+                            </div>
+                            <button
+                              onClick={handleJournalSearch}
+                              disabled={isSearchingJournal || !journalQuery}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-[#0984E3] text-white rounded-lg text-[10px] font-bold shadow-sm hover:shadow-md transition-all disabled:opacity-50"
+                            >
+                              {isSearchingJournal ? <Loader2 className="w-3 h-3 animate-spin" /> : '智能搜尋'}
+                            </button>
+                          </div>
+
+                          {journalResults && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="mt-3 p-4 bg-[#0984E3]/5 border border-[#0984E3]/20 rounded-2xl relative overflow-hidden group/results"
+                            >
+                              <div className="flex justify-between items-start mb-2">
+                                <span className="text-[10px] font-bold text-[#0984E3] uppercase tracking-wider flex items-center gap-1">
+                                  <ShieldCheck className="w-3 h-3" /> 搜尋結果 (經 Google 驗證，無幻覺)
+                                </span>
+                                <button 
+                                  onClick={() => setJournalResults(null)}
+                                  className="text-[#636E72] hover:text-red-500 transition-colors"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                              <div className="text-[11px] text-[#2D3436] line-clamp-4 mb-3 leading-relaxed">
+                                <ReactMarkdown>{journalResults.text}</ReactMarkdown>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                {journalResults.sourceUrl && (
+                                  <div 
+                                    className="text-[9px] text-[#0984E3] opacity-60 hover:opacity-100 cursor-help flex items-center gap-1 truncate max-w-[150px]"
+                                    title="該資訊來源經由 Google Search 獲取"
+                                  >
+                                    <Info className="w-2.5 h-2.5" /> 點擊右方按鈕套用此規範
+                                  </div>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    setSecondaryInput(journalResults.text);
+                                    setJournalResults(null);
+                                    setJournalQuery('');
+                                  }}
+                                  className="px-3 py-1 bg-white border border-[#0984E3]/30 text-[#0984E3] rounded-lg text-[10px] font-bold hover:bg-[#0984E3] hover:text-white transition-all shadow-sm"
+                                >
+                                  套用至編輯器
+                                </button>
+                              </div>
+                            </motion.div>
+                          )}
+                        </div>
+                      )}
+
                       <textarea
                         placeholder={activeTab === 'guideline' ? "貼入該期刊的字數限制、格式要求等..." : "貼入審查專家的回饋建議..."}
                         value={secondaryInput}
