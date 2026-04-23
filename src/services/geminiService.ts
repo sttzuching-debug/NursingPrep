@@ -1,8 +1,22 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+let genAI: GoogleGenAI | null = null;
+
+function getAI() {
+  if (!genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      // Don't throw here at module load, but handle it gracefully
+      console.warn("GEMINI_API_KEY is missing. AI features will not work.");
+      // Return a dummy object or handle in functions
+    }
+    genAI = new GoogleGenAI({ apiKey: apiKey || "" });
+  }
+  return genAI;
+}
 
 export async function summarizePaper(paperText: string, targetLength?: string) {
+  const ai = getAI();
   const model = "gemini-3.1-pro-preview"; // Use Pro for complex reasoning/summarization
   const prompt = `
     你是一位專業的護理期刊編輯。請將以下護理論文/論文摘要（或全文）濃縮成適合投稿至學術期刊的版本。
@@ -31,6 +45,7 @@ export async function summarizePaper(paperText: string, targetLength?: string) {
 }
 
 export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string) {
+  const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
     你是一位資深的護理期刊排版與內容專家。請依照「期刊作者指引 (Author Guidelines)」修正以下論文內容。
@@ -65,6 +80,7 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
 }
 
 export async function reviseByReviews(paperText: string, reviewerComments: string) {
+  const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
     你是一位經驗豐富的護理研究專家。請根據「審查者建議」對以下論文進行修正。
@@ -97,6 +113,7 @@ export async function reviseByReviews(paperText: string, reviewerComments: strin
 }
 
 export async function extractGlossary(paperText: string) {
+  const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
     你是一位護理學術專家。請從以下論文內容中提取關鍵術語、專業術語或縮寫，並生成一份術語表 (Glossary)。
@@ -125,6 +142,7 @@ export async function extractGlossary(paperText: string) {
 }
 
 export async function analyzeTone(outputText: string) {
+  const ai = getAI();
   const model = "gemini-1.5-flash"; // Use Flash for faster analysis
   const prompt = `
     你是一位專業的護理學術期刊審稿人。請分析以下這段學術內容的「寫作語氣」與「專業度」，並提供改進建議。

@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import mammoth from 'mammoth';
+// For browser environments, mammoth needs careful import or use of browser-specific build if needed
+import * as mammoth from 'mammoth';
 
 // Initialize PDF.js worker using Vite's URL import for the bundle
 // This ensures the worker is bundled and served correctly without relying on external CDNs
