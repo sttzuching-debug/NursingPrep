@@ -1,5 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 
+export interface AIResponse {
+  text: string;
+  usage?: {
+    promptTokens: number;
+    candidatesTokens: number;
+    totalTokens: number;
+  };
+}
+
 let genAI: GoogleGenAI | null = null;
 
 function getAI() {
@@ -15,7 +24,7 @@ function getAI() {
   return genAI;
 }
 
-export async function summarizePaper(paperText: string, targetLength?: string) {
+export async function summarizePaper(paperText: string, targetLength?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview"; // Use Pro for complex reasoning/summarization
   const prompt = `
@@ -37,14 +46,21 @@ export async function summarizePaper(paperText: string, targetLength?: string) {
       model,
       contents: prompt,
     });
-    return response.text;
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
   } catch (error) {
     console.error("Summarization error:", error);
     throw error;
   }
 }
 
-export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string) {
+export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
@@ -72,14 +88,21 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
       model,
       contents: prompt,
     });
-    return response.text;
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
   } catch (error) {
     console.error("Formatting error:", error);
     throw error;
   }
 }
 
-export async function reviseByReviews(paperText: string, reviewerComments: string) {
+export async function reviseByReviews(paperText: string, reviewerComments: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
@@ -105,14 +128,21 @@ export async function reviseByReviews(paperText: string, reviewerComments: strin
       model,
       contents: prompt,
     });
-    return response.text;
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
   } catch (error) {
     console.error("Revision error:", error);
     throw error;
   }
 }
 
-export async function extractGlossary(paperText: string) {
+export async function extractGlossary(paperText: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
@@ -134,16 +164,23 @@ export async function extractGlossary(paperText: string) {
       model,
       contents: prompt,
     });
-    return response.text;
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
   } catch (error) {
     console.error("Glossary extraction error:", error);
     throw error;
   }
 }
 
-export async function analyzeTone(outputText: string) {
+export async function analyzeTone(outputText: string): Promise<AIResponse> {
   const ai = getAI();
-  const model = "gemini-1.5-flash"; // Use Flash for faster analysis
+  const model = "gemini-3-flash-preview"; // Upgraded from gemini-1.5-flash
   const prompt = `
     你是一位專業的護理學術期刊審稿人。請分析以下這段學術內容的「寫作語氣」與「專業度」，並提供改進建議。
     
@@ -168,7 +205,14 @@ export async function analyzeTone(outputText: string) {
       model,
       contents: prompt,
     });
-    return response.text;
+    return {
+      text: response.text || "",
+      usage: response.usageMetadata ? {
+        promptTokens: response.usageMetadata.promptTokenCount || 0,
+        candidatesTokens: response.usageMetadata.candidatesTokenCount || 0,
+        totalTokens: response.usageMetadata.totalTokenCount || 0
+      } : undefined
+    };
   } catch (error) {
     console.error("Tone analysis error:", error);
     throw error;

@@ -32,7 +32,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toPng } from 'html-to-image';
 import { cn } from '@/src/lib/utils';
-import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone } from '@/src/services/geminiService';
+import { summarizePaper, formatByGuidelines, reviseByReviews, extractGlossary, analyzeTone, type AIResponse } from '@/src/services/geminiService';
 import { encryptData, decryptData } from '@/src/lib/security';
 import { extractTextFromPDF, extractTextFromDOCX, extractTextFromTXT } from '@/src/lib/fileParser';
 import { exportToDocx } from '@/src/lib/docxExport';
@@ -61,12 +61,23 @@ export default function App() {
   // Analytics/Session Stats
   const [sessionStats, setSessionStats] = useState({
     wordsProcessed: 0,
-    tasksCompleted: 0
+    tasksCompleted: 0,
+    totalTokens: 0,
+    estimatedCost: 0
   });
 
   const getWordCount = (text: string) => {
     if (!text) return 0;
     return text.trim().split(/\s+/).filter(Boolean).length || text.trim().length; 
+  };
+
+  const calculateCost = (usage: AIResponse['usage'], isFlash: boolean = false) => {
+    if (!usage) return 0;
+    // Gemini 1.5 Pro: Input $1.25/1M, Output $5/1M
+    // Gemini 1.5 Flash: Input $0.075/1M, Output $0.3/1M
+    const inputRate = isFlash ? 0.075 / 1000000 : 1.25 / 1000000;
+    const outputRate = isFlash ? 0.3 / 1000000 : 5 / 1000000;
+    return (usage.promptTokens * inputRate) + (usage.candidatesTokens * outputRate);
   };
 
   const handleAction = async () => {
@@ -75,28 +86,35 @@ export default function App() {
     setResult('');
     setToneResult('');
     try {
-      let output = '';
+      let response: AIResponse | null = null;
       if (activeTab === 'condense') {
-        output = await summarizePaper(paperContent);
+        response = await summarizePaper(paperContent);
       } else if (activeTab === 'guideline') {
-        output = await formatByGuidelines(paperContent, secondaryInput, citationStyle);
+        response = await formatByGuidelines(paperContent, secondaryInput, citationStyle);
       } else if (activeTab === 'revision') {
-        output = await reviseByReviews(paperContent, secondaryInput);
+        response = await reviseByReviews(paperContent, secondaryInput);
       } else if (activeTab === 'glossary') {
-        output = await extractGlossary(paperContent);
+        response = await extractGlossary(paperContent);
       }
-      setResult(output || '');
       
-      // Automatic Tone Check for relevant tabs
-      if (output && (activeTab === 'guideline' || activeTab === 'revision')) {
-        performToneCheck(output);
-      }
+      if (response) {
+        setResult(response.text);
+        
+        // Automatic Tone Check for relevant tabs
+        if (response.text && (activeTab === 'guideline' || activeTab === 'revision')) {
+          performToneCheck(response.text);
+        }
 
-      // Update session stats
-      setSessionStats(prev => ({
-        wordsProcessed: prev.wordsProcessed + getWordCount(paperContent),
-        tasksCompleted: prev.tasksCompleted + 1
-      }));
+        // Update session stats
+        const cost = calculateCost(response.usage, false); // Pro models
+        setSessionStats(prev => ({
+          ...prev,
+          wordsProcessed: prev.wordsProcessed + getWordCount(paperContent),
+          tasksCompleted: prev.tasksCompleted + 1,
+          totalTokens: prev.totalTokens + (response?.usage?.totalTokens || 0),
+          estimatedCost: prev.estimatedCost + cost
+        }));
+      }
     } catch (error) {
       setResult('發生錯誤，請稍後再試。');
     } finally {
@@ -107,8 +125,16 @@ export default function App() {
   const performToneCheck = async (text: string) => {
     setIsAnalyzingTone(true);
     try {
-      const toneAnalysis = await analyzeTone(text);
-      setToneResult(toneAnalysis || '');
+      const response = await analyzeTone(text);
+      if (response) {
+        setToneResult(response.text);
+        const cost = calculateCost(response.usage, true); // Flash model
+        setSessionStats(prev => ({
+          ...prev,
+          totalTokens: prev.totalTokens + (response.usage?.totalTokens || 0),
+          estimatedCost: prev.estimatedCost + cost
+        }));
+      }
     } catch (error) {
       console.error("Tone Analysis failed:", error);
     } finally {
@@ -516,7 +542,19 @@ export default function App() {
                         <p className="text-[10px] text-[#636E72] font-bold uppercase mb-1">完成任務</p>
                         <p className="text-xl font-bold text-[#0984E3]">{sessionStats.tasksCompleted}</p>
                       </div>
+                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center">
+                        <p className="text-[10px] text-[#636E72] font-bold uppercase mb-1">Token 使用量</p>
+                        <p className="text-xl font-bold text-[#0984E3]">{sessionStats.totalTokens.toLocaleString()}</p>
+                      </div>
+                      <div className="bg-[#F8F9FA] p-4 rounded-2xl text-center border border-[#00B894]/20">
+                        <p className="text-[10px] text-[#00B894] font-bold uppercase mb-1">預估花費 (USD)</p>
+                        <p className="text-xl font-bold text-[#00B894]">${sessionStats.estimatedCost.toFixed(4)}</p>
+                      </div>
                    </div>
+
+                   <p className="text-[9px] text-[#B2BEC3] mb-6 px-1">
+                     * 花費估算基準：Gemini 3 Pro ($1.25/$5 per 1M tokens) 與 Flash ($0.075/$0.3 per 1M tokens)。僅供預算參考。
+                   </p>
 
                    <h4 className="font-bold mb-4 text-sm">資安等級指標</h4>
                    <div className="space-y-4">
