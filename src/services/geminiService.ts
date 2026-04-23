@@ -1,0 +1,158 @@
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+export async function summarizePaper(paperText: string, targetLength?: string) {
+  const model = "gemini-3.1-pro-preview"; // Use Pro for complex reasoning/summarization
+  const prompt = `
+    你是一位專業的護理期刊編輯。請將以下護理論文/論文摘要（或全文）濃縮成適合投稿至學術期刊的版本。
+    
+    要求：
+    1. 保持學術精確性與護理專業術語。
+    2. 結構應包含：背景、目的、方法、結果、結論/建議（IMRAD格式）。
+    3. ${targetLength ? `目標長度約為 ${targetLength} 字。` : '請濃縮成精華版本，刪除冗餘資訊。'}
+    4. **特別注意：如果原文中包含數據表格，請務必精簡並以 Markdown 表格格式保留在「結果 (Results)」章節中。**
+    5. 請使用繁體中文（除非原文為英文）。
+    
+    論文內容：
+    ${paperText}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Summarization error:", error);
+    throw error;
+  }
+}
+
+export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string) {
+  const model = "gemini-3.1-pro-preview";
+  const prompt = `
+    你是一位資深的護理期刊排版與內容專家。請依照「期刊作者指引 (Author Guidelines)」修正以下論文內容。
+    
+    ${citationStyle ? `特別要求：請使用「${citationStyle}」引用格式。` : ''}
+    
+    期刊指引內容：
+    ${guidelines}
+    
+    論文內容：
+    ${paperText}
+    
+    要求：
+    1. 修正標題格式、摘要結構。
+    2. 調整引用格式${citationStyle ? `（嚴格執行 ${citationStyle} 規範）` : '（如 APA, Harvard 等，依指引而定）'}。
+    3. 核心內容字數限制與用語修正。
+    4. **若原文或指引提及表格，請確保輸出中的表格符合護理期刊標準（三線表格式：上、中、下橫線）。**
+    5. 若指引中有具體限制（如字數、段落數），請嚴格遵守並在輸出中標註。
+    6. 請返回修正後的全文，並在最後列出主要的修改項目。
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Formatting error:", error);
+    throw error;
+  }
+}
+
+export async function reviseByReviews(paperText: string, reviewerComments: string) {
+  const model = "gemini-3.1-pro-preview";
+  const prompt = `
+    你是一位經驗豐富的護理研究專家。請根據「審查者建議」對以下論文進行修正。
+    
+    審查者建議：
+    ${reviewerComments}
+    
+    原始論文內容：
+    ${paperText}
+    
+    要求：
+    1. 針對每條建議進行內容修正。
+    2. 若建議提到邏輯不清或資料不足，請以專業護理知識輔助潤飾（若需補充資料，請用引號 [...] 提醒作者）。
+    3. 生成兩個部分：
+       a. 修正後的論文全文。
+       b. 點對點回覆審查意見的對照表 (Response to Reviewers Table)。
+    4. 語氣應專業、客觀且有禮貌。
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Revision error:", error);
+    throw error;
+  }
+}
+
+export async function extractGlossary(paperText: string) {
+  const model = "gemini-3.1-pro-preview";
+  const prompt = `
+    你是一位護理學術專家。請從以下論文內容中提取關鍵術語、專業術語或縮寫，並生成一份術語表 (Glossary)。
+    
+    要求：
+    1. 識別臨床術語、研究方法學術語、統計術語以及特定的護理概念。
+    2. 對於每個術語，請提供簡明扼要的定義或說明。
+    3. 如果包含縮寫，請列出其全稱。
+    4. 以 Markdown 格式輸出，結構清晰。
+    5. 使用繁體中文說明。
+    
+    論文內容：
+    ${paperText}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Glossary extraction error:", error);
+    throw error;
+  }
+}
+
+export async function analyzeTone(outputText: string) {
+  const model = "gemini-1.5-flash"; // Use Flash for faster analysis
+  const prompt = `
+    你是一位專業的護理學術期刊審稿人。請分析以下這段學術內容的「寫作語氣」與「專業度」，並提供改進建議。
+    
+    分析維度：
+    1. **學術化程度**：是否足夠正式？是否使用了精確的學術動詞與句構？
+    2. **口語化檢查**：是否存在過於非正式、口語或不專業的排句？
+    3. **偏見與中立性**：是否使用了帶有偏見、標籤化或不夠中立的詞彙（例如：以病為名而非以人為本的表達）？
+    
+    請以 Markdown 格式回傳，格式要求如下：
+    - ## 語氣分析報告
+    - **綜合點評**：[簡述整體寫作語氣]
+    - **優點**：[列出 1-2 個寫作優點]
+    - **需改進處**：[具體指出問題點]
+    - **建議修正**：[提供 1-2 段具體的潤飾建議]
+    
+    待分析內容：
+    ${outputText}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+    });
+    return response.text;
+  } catch (error) {
+    console.error("Tone analysis error:", error);
+    throw error;
+  }
+}
