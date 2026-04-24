@@ -24,9 +24,9 @@ function getAI() {
   return genAI;
 }
 
-export async function summarizePaper(paperText: string, targetLength?: string, originalSource?: string): Promise<AIResponse> {
+export async function summarizePaper(paperText: string, targetLength?: string, originalSource?: string, bibliography?: string[]): Promise<AIResponse> {
   const ai = getAI();
-  const model = "gemini-3.1-pro-preview"; // Use Pro for complex reasoning/summarization
+  const model = "gemini-3.1-pro-preview"; 
   const prompt = `
     你是一位專業的護理期刊編輯。請將以下護理論文/論文摘要（或全文）濃縮成適合投稿至學術期刊的版本。
     
@@ -36,17 +36,30 @@ export async function summarizePaper(paperText: string, targetLength?: string, o
     ${originalSource.substring(0, 3000)}... (省略過長內容)
     ` : ''}
 
+    ${bibliography && bibliography.length > 0 ? `參考文獻清單 (Bibliography)：
+    [請在文中適當位置標註這些文獻的引用，並在文末列出完整的參考文獻列表。]
+    ${bibliography.join('\n')}
+    ` : ''}
+
     當前工作版本內容：
     ${paperText}
 
     要求：
     1. 保持學術精確性與護理專業術語。
     2. 結構應包含：背景、目的、方法、結果、結論/建議（IMRAD格式）。
-    3. ${targetLength ? `目標長度約為 ${targetLength} 字。` : '請濃縮成精華版本，刪除冗餘資訊。'}
-    4. **特別注意：如果原文中包含數據表格，請務必精簡並以 Markdown 表格格式保留在「結果 (Results)」章節中。**
-    5. 請使用繁體中文（除非原文為英文）。
-    6. 若提供參考原稿，請確保當前版本的邏輯與原稿核心一致，但語氣更學術化。
+    3. **排除 LaTeX 語法 (Clean Symbols)**：**嚴禁輸出 LaTeX 格式（如 $...$, \ge, ^{}, \beta）**。
+       - **不可使用 $...$ 包裹數學公式或變數**。
+       - **請使用標準 Unicode 符號**：
+         - 使用 \`R²\` 或 \`R^2\` (非 LaTeX) 代替 \`$R^2$\`。
+         - 使用 \`p < .05\` (非 LaTeX) 代替 \`$p < .05$\`。
+         - 使用 \`≥\`, \`≤\`, \`±\`, \`≈\`, \`α\`, \`β\`, \`χ²\` 等標準符號。
+         - 顯著性標註請使用標準星號，例如：\`*p* < .05\`, \`**p* < .01\`。
+    4. ${targetLength ? `目標長度約為 ${targetLength} 字。` : '請濃縮成精華版本，刪除冗餘資訊。'}
+    5. **特別注意：如果原文中包含數據表格，請務必精簡並以 Markdown 表格格式保留在「結果 (Results)」章節中。**
+    6. 請使用繁體中文。
+    7. 若提供參考文獻，請確保文中的引用與文末的列表一致。
     `;
+// ...
 
   try {
     const response = await ai.models.generateContent({
@@ -67,11 +80,13 @@ export async function summarizePaper(paperText: string, targetLength?: string, o
   }
 }
 
-export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string, originalSource?: string): Promise<AIResponse> {
+export async function formatByGuidelines(paperText: string, guidelines: string, citationStyle?: string, originalSource?: string, bibliography?: string[], targetLength?: string): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
     你是一位資深的護理期刊排版與內容專家。請依照「期刊作者指引 (Author Guidelines)」修正以下論文內容。
+    
+    ${targetLength ? `特別任務：請在符合指引的前提下，將論文內容濃縮至約 ${targetLength} 字左右。` : ''}
     
     ${citationStyle ? `特別要求：請使用「${citationStyle}」引用格式。` : ''}
     
@@ -81,6 +96,11 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
     ${originalSource.substring(0, 3000)}...
     ` : ''}
 
+    ${bibliography && bibliography.length > 0 ? `參考文獻清單 (Bibliography)：
+    [請根據指定的 ${citationStyle || '學術'} 格式，在文中插入正確的引用標記，並在文末生成對應的參考文獻列表。]
+    ${bibliography.join('\n')}
+    ` : ''}
+
     期刊指引內容：
     ${guidelines}
     
@@ -88,12 +108,20 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
     ${paperText}
     
     要求：
-    1. 修正標題格式、摘要結構。
-    2. 調整引用格式${citationStyle ? `（嚴格執行 ${citationStyle} 規範）` : '（如 APA, Harvard 等，依指引而定）'}。
-    3. 核心內容字數限制與用語修正。
-    4. **若原文或指引提及表格，請確保輸出中的表格符合護理期刊標準（三線表格式：上、中、下橫線）。**
-    5. 若指引中有具體限制（如字數、段落數），請嚴格遵守並在輸出中標註。
-    6. 請返回修正後的全文，並在最後列出主要的修改項目。
+    1. **結構完整性 (Full Presentation)**：必須輸出包含完整結構（標題、摘要、背景、方法、結果、討論、結論、參考文獻）的論文版本。嚴禁只提供片段、大綱或「...」省略號。
+    2. **數據表格化 (Automatic Tables)**：請主動從原文或「參考原稿」中挖掘具體的統計數據（如：中位數、平均值、P 值、受試者分佈），並將其轉換為標準的 Markdown 三線表格式插入「結果 (Results)」章節。
+    3. **排除 LaTeX 語法 (Clean Symbols)**：**嚴禁輸出 LaTeX 格式（如 $...$, \ge, ^{}, \beta）**。
+       - **不可使用 $...$ 包裹數學公式或變數**。
+       - **請使用標準 Unicode 符號**：
+         - 使用 \`R²\` 或 \`R^2\` (非 LaTeX) 代替 \`$R^2$\`。
+         - 使用 \`p < .05\` (非 LaTeX) 代替 \`$p < .05$\`。
+         - 使用 \`≥\`, \`≤\`, \`±\`, \`≈\`, \`α\`, \`β\`, \`χ²\` 等標準符號。
+         - 顯著性標註請使用標準星號，例如：\`*p* < .05\`, \`**p* < .01\`。
+    4. **格式化與配額**：${targetLength ? `根據投稿要求，請將全文精確濃縮至約 ${targetLength} 字左右。` : '在保持內容完整的前提下，盡可能精簡不必要的贅述。'}
+    5. **引用格式**：依照「${citationStyle || '學術'}」規範標註文中引用與末尾文獻。
+    6. **補齊文末聲明 (Back Matter)**：主動根據指引補齊 Funding, Author Contributions 等聲明區塊。
+    7. **語氣與語言**：使用繁體中文，語氣應嚴謹、客觀且專業。
+    8. 返回內容：[修正後的完整論文全文] + [期刊規格符合度檢查清單]。
   `;
 
   try {
@@ -115,7 +143,7 @@ export async function formatByGuidelines(paperText: string, guidelines: string, 
   }
 }
 
-export async function reviseByReviews(paperText: string, reviewerComments: string, originalSource?: string): Promise<AIResponse> {
+export async function reviseByReviews(paperText: string, reviewerComments: string, originalSource?: string, bibliography?: string[]): Promise<AIResponse> {
   const ai = getAI();
   const model = "gemini-3.1-pro-preview";
   const prompt = `
@@ -127,6 +155,11 @@ export async function reviseByReviews(paperText: string, reviewerComments: strin
     ${originalSource.substring(0, 3000)}...
     ` : ''}
 
+    ${bibliography && bibliography.length > 0 ? `參考文獻清單 (Bibliography)：
+    [若修正內容需要引用，請優先使用此清單中的原始文獻。]
+    ${bibliography.join('\n')}
+    ` : ''}
+
     審查者建議：
     ${reviewerComments}
     
@@ -135,11 +168,14 @@ export async function reviseByReviews(paperText: string, reviewerComments: strin
     
     要求：
     1. 針對每條建議進行內容修正。
-    2. 若建議提到邏輯不清或資料不足，請以專業護理知識輔助潤飾（若需補充資料，優先參考原稿；若無，請用引號 [...] 提醒作者）。
-    3. 生成兩個部分：
+    2. 強化學術严謹性，適當插入參考文獻引用。
+    3. **排除 LaTeX 語法 (Clean Symbols)**：**嚴禁輸出 LaTeX 格式（如 $...$, \ge, ^{}）**。
+       - **不可使用 $...$ 包裹數學公式或變數**。
+       - **請使用標準 Unicode 符號**：使用 \`≥\`, \`≤\`, \`±\`, \`p < .05\` 等。
+    4. 生成兩個部分：
        a. 修正後的論文全文。
-       b. 點對點回覆審查意見的對照表 (Response to Reviewers Table)。
-    4. 語氣應專業、客觀且有禮貌。
+       b. 點對點回覆審查意見的對照表。
+    5. 語氣應專業、客觀且有禮貌。
   `;
 
   try {
@@ -325,7 +361,7 @@ export async function polishResult(content: string, tone: 'academic' | 'concise'
   }
 }
 
-export async function searchJournalGuidelines(journalName: string): Promise<AIResponse & { sourceUrl?: string }> {
+export async function searchJournalGuidelines(journalName: string): Promise<AIResponse & { sourceUrl?: string; parsed?: { wordCount?: string; citationStyle?: string } }> {
   const ai = getAI();
   const model = "gemini-3-flash-preview"; 
   
@@ -333,19 +369,24 @@ export async function searchJournalGuidelines(journalName: string): Promise<AIRe
     請使用 Google 搜尋尋找期刊「${journalName}」的官方「作者投稿指引 (Author Guidelines)」或「投稿須知 (Instructions for Authors)」。
     
     請從搜尋結果中提取以下關鍵資訊：
-    1. 格式要求（如：字數限制、摘要結構）。
-    2. 引用格式（如：APA, AMA, Vancouver）。
-    3. 投稿系統連結或官方指引頁面連結。
+    1. 格式與結構：字數限制、摘要結構（如背景、方法等）、**圖表繪製規範（解析度、圖題格式）**。
+    2. 引用格式：明確標註引用風格（如：APA, AMA, Vancouver）。
+    3. **技術細節**：統計方法呈現要求（如：P 值、信賴區間、軟體資訊標註）。
+    4. **文末聲明要求 (Back Matter)**：是否需要 Funding, Author Contributions, Conflicts of Interest 等特定章節。
+    5. 投稿系統連結與官方指引頁面連結。
     
-    你的回覆應包含：
-    - 期刊完整名稱
-    - 關鍵投稿規範摘要
-    - 官方指引連結
+    你的回覆應包含兩個部分：
+    1. 詳細的規範摘要（繁體中文）。
+    2. 一個 JSON 程式碼區塊，包含以下欄位（若無則留空）：
+       - "wordCount": 提取到的字數限制數字（如 "3000"）。
+       - "citationStyle": 識別出的常用引用格式名稱（必須屬於這幾種：'APA 7th', 'AMA', 'Vancouver', 'Harvard', 'MLA 9th', 'Chicago'，若不確定則填寫最接近的）。
+
+    JSON 格式示例：\`\`\`json {"wordCount": "3000", "citationStyle": "APA 7th"} \`\`\`
     
     要求：
     - 嚴格遵守搜尋結果，不可造假或憑空想像。
     - 若找不到確切指引，請老實說明。
-    - 使用繁體中文。
+    - 使用繁體中文進行第一部分的說明。
   `;
 
   try {
@@ -357,12 +398,26 @@ export async function searchJournalGuidelines(journalName: string): Promise<AIRe
       }
     });
 
+    const text = response.text || "";
+    let parsed: { wordCount?: string; citationStyle?: string } | undefined;
+
+    // Extract JSON from text
+    const jsonMatch = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+    if (jsonMatch) {
+      try {
+        parsed = JSON.parse(jsonMatch[1]);
+      } catch (e) {
+        console.error("Failed to parse journal JSON:", e);
+      }
+    }
+
     // Extracting source URL if available from grounding metadata
     const groundMetadata = response.candidates?.[0]?.groundingMetadata;
     const sourceUrl = groundMetadata?.searchEntryPoint?.renderedContent;
 
     return {
-      text: response.text || "",
+      text: text.replace(/```json\s*\{[\s\S]*?\}\s*```/g, "").trim(),
+      parsed,
       sourceUrl: sourceUrl,
       usage: response.usageMetadata ? {
         promptTokens: response.usageMetadata.promptTokenCount || 0,

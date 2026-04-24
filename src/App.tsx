@@ -34,7 +34,10 @@ import {
   Target,
   Search,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Library,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -47,13 +50,14 @@ import { extractTextFromPDF, extractTextFromDOCX, extractTextFromTXT } from '@/s
 import { exportToDocx } from '@/src/lib/docxExport';
 import { RESEARCH_TEMPLATES } from './constants';
 
-type TabType = 'dashboard' | 'condense' | 'guideline' | 'revision' | 'glossary' | 'analytics';
+type TabType = 'dashboard' | 'condense' | 'preparation' | 'revision' | 'bibliography' | 'glossary' | 'analytics';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [paperContent, setPaperContent] = useState('');
   const [referenceContent, setReferenceContent] = useState('');
   const [secondaryInput, setSecondaryInput] = useState(''); 
+  const [targetWordCount, setTargetWordCount] = useState('');
   const [citationStyle, setCitationStyle] = useState('APA 7th');
   const [result, setResult] = useState('');
   const [toneResult, setToneResult] = useState('');
@@ -64,6 +68,8 @@ export default function App() {
   const [isPolishing, setIsPolishing] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [isParsingReference, setIsParsingReference] = useState(false);
+  const [references, setReferences] = useState<string[]>([]);
+  const [newReference, setNewReference] = useState('');
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
@@ -77,7 +83,7 @@ export default function App() {
 
   // Journal Search State
   const [journalQuery, setJournalQuery] = useState('');
-  const [journalResults, setJournalResults] = useState<{ text: string; sourceUrl?: string } | null>(null);
+  const [journalResults, setJournalResults] = useState<{ text: string; sourceUrl?: string; parsed?: { wordCount?: string; citationStyle?: string } } | null>(null);
   const [isSearchingJournal, setIsSearchingJournal] = useState(false);
 
   // Security States
@@ -133,7 +139,7 @@ export default function App() {
   // --- End Search Logic ---
 
   useEffect(() => {
-    if ((activeTab === 'guideline' || activeTab === 'revision') && !referenceContent) {
+    if ((activeTab === 'preparation' || activeTab === 'revision') && !referenceContent) {
       const timer = setTimeout(() => {
         if (confirm('【智能提示】檢測到您正在使用「投稿指引」或「審查修正」功能。\n\n建議上傳「論文原稿」作為 AI 參考依據，這能讓 AI 更精準地從原文提取數據與論點。要現在載入原稿嗎？')) {
           referenceInputRef.current?.click();
@@ -173,11 +179,11 @@ export default function App() {
     try {
       let response: AIResponse | null = null;
       if (activeTab === 'condense') {
-        response = await summarizePaper(paperContent, undefined, referenceContent);
-      } else if (activeTab === 'guideline') {
-        response = await formatByGuidelines(paperContent, secondaryInput, citationStyle, referenceContent);
+        response = await summarizePaper(paperContent, targetWordCount, referenceContent, references);
+      } else if (activeTab === 'preparation') {
+        response = await formatByGuidelines(paperContent, secondaryInput, citationStyle, referenceContent, references, targetWordCount);
       } else if (activeTab === 'revision') {
-        response = await reviseByReviews(paperContent, secondaryInput, referenceContent);
+        response = await reviseByReviews(paperContent, secondaryInput, referenceContent, references);
       } else if (activeTab === 'glossary') {
         response = await extractGlossary(paperContent);
       }
@@ -186,7 +192,7 @@ export default function App() {
         setResult(response.text);
         
         // Automatic Tone Check for relevant tabs
-        if (response.text && (activeTab === 'guideline' || activeTab === 'revision')) {
+        if (response.text && (activeTab === 'condense' || activeTab === 'preparation' || activeTab === 'revision')) {
           performToneCheck(response.text);
         }
 
@@ -235,7 +241,7 @@ export default function App() {
         }));
 
         // Re-run tone check if relevant
-        if (activeTab === 'guideline' || activeTab === 'revision') {
+        if (activeTab === 'condense' || activeTab === 'preparation' || activeTab === 'revision') {
           performToneCheck(response.text);
         }
       }
@@ -254,9 +260,13 @@ export default function App() {
     try {
       const response = await searchJournalGuidelines(journalQuery);
       if (response) {
-        setJournalResults({ text: response.text, sourceUrl: response.sourceUrl });
+        setJournalResults({ text: response.text, sourceUrl: response.sourceUrl, parsed: response.parsed });
         
-        // Update stats (Flash model with search)
+        // Auto-fill if parsed data exists
+        if (response.parsed) {
+          if (response.parsed.wordCount) setTargetWordCount(response.parsed.wordCount);
+          if (response.parsed.citationStyle) setCitationStyle(response.parsed.citationStyle);
+        }
         const cost = calculateCost(response.usage, true); 
         setSessionStats(prev => ({
           ...prev,
@@ -270,6 +280,22 @@ export default function App() {
     } finally {
       setIsSearchingJournal(false);
     }
+  };
+
+  const addReference = () => {
+    if (newReference.trim()) {
+      setReferences(prev => [...prev, newReference.trim()]);
+      setNewReference('');
+    }
+  };
+
+  const removeReference = (index: number) => {
+    setReferences(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const importReferences = (text: string) => {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    setReferences(prev => [...prev, ...lines]);
   };
 
   const performToneCheck = async (text: string) => {
@@ -429,8 +455,9 @@ export default function App() {
   const sidebarItems = [
     { id: 'dashboard', label: '首頁總覽', icon: LayoutDashboard },
     { id: 'condense', label: '論文濃縮', icon: FileText },
-    { id: 'guideline', label: '投稿指引', icon: BookOpen },
+    { id: 'preparation', label: '投稿準備', icon: BookOpen },
     { id: 'revision', label: '審查修正', icon: MessageSquareQuote },
+    { id: 'bibliography', label: '文獻管理', icon: Library },
     { id: 'glossary', label: '術語提取', icon: Tags },
     { id: 'analytics', label: '工作統計', icon: BarChart3 },
   ];
@@ -665,8 +692,8 @@ export default function App() {
                 <div className="md:col-span-2 space-y-6">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {[
-                      { id: 'condense', title: '論文濃縮', desc: '提取學位論文精華。', color: 'bg-[#74B9FF]', icon: FileText },
-                      { id: 'guideline', title: '投稿指引', desc: 'AI 協助調整排版格式。', color: 'bg-[#55EFC4]', icon: BookOpen },
+                      { id: 'condense', title: '論文濃縮', desc: '純濃縮精簡學位論文。', color: 'bg-[#74B9FF]', icon: FileText },
+                      { id: 'preparation', title: '投稿準備', desc: '格式調整與指引對齊。', color: 'bg-[#55EFC4]', icon: BookOpen },
                       { id: 'revision', title: '審查修正', desc: '生成回覆對照表。', color: 'bg-[#FAB1A0]', icon: MessageSquareQuote },
                       { id: 'glossary', title: '術語提取', desc: '自動識別專業術語。', color: 'bg-[#A29BFE]', icon: Tags },
                       { id: 'security', title: '隱私保護', desc: 'AES 加密保護內容。', color: 'bg-[#00B894]', icon: Lock, action: toggleSecureMode },
@@ -776,6 +803,170 @@ export default function App() {
                          NursingPrep 承諾保護科研隱私，所有資料解析僅供個人學術使用。
                        </p>
                     </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'bibliography' && (
+              <motion.div
+                key="bibliography"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full overflow-hidden p-4 lg:p-8"
+              >
+                <div className="flex flex-col gap-6 h-full min-h-0">
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 lg:p-8 shadow-sm h-full flex flex-col min-h-0">
+                    <div className="flex items-center gap-3 mb-6">
+                       <div className="p-3 bg-[#0984E3]/10 rounded-2xl">
+                         <Library className="text-[#0984E3] w-6 h-6" />
+                       </div>
+                       <div>
+                         <h2 className="text-xl font-bold">文獻管理 (Bibliography)</h2>
+                         <p className="text-xs text-[#636E72] font-medium uppercase tracking-widest">在此管理論文引用的參考文獻</p>
+                       </div>
+                    </div>
+
+                    <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                      <div className="relative">
+                        <textarea
+                          placeholder="批次匯入：在此貼入多行參考文獻 (每行一條)..."
+                          className="w-full bg-[#F1F2F6] rounded-2xl p-4 text-sm min-h-[120px] lg:min-h-[150px] focus:ring-2 focus:ring-[#0984E3] transition-all resize-none outline-none border-none font-sans"
+                          id="bulk-import-area"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && e.ctrlKey) {
+                              importReferences((e.target as HTMLTextAreaElement).value);
+                              (e.target as HTMLTextAreaElement).value = '';
+                            }
+                          }}
+                        />
+                        <button 
+                          onClick={() => {
+                            const textarea = document.getElementById('bulk-import-area') as HTMLTextAreaElement;
+                            if (textarea) {
+                              importReferences(textarea.value);
+                              textarea.value = '';
+                            }
+                          }}
+                          className="absolute bottom-4 right-4 bg-[#0984E3] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg hover:shadow-[#0984E3]/30 transition-all active:scale-95"
+                        >
+                          批次匯入
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <input 
+                          type="text"
+                          placeholder="輸入單條引文 (例如: Author, Year, Title...)"
+                          value={newReference}
+                          onChange={(e) => setNewReference(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && addReference()}
+                          className="flex-1 bg-[#F1F2F6] rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#0984E3] outline-none border border-transparent focus:border-[#0984E3]/30"
+                        />
+                        <button 
+                          onClick={addReference}
+                          disabled={!newReference.trim()}
+                          className="px-6 bg-[#0984E3] text-white rounded-xl font-bold transition-all disabled:opacity-50 hover:shadow-lg hover:shadow-[#0984E3]/20 active:scale-95"
+                        >
+                          <Plus className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto min-h-0 pr-2 space-y-2 custom-scrollbar">
+                        {references.length === 0 ? (
+                          <div className="h-full flex flex-col items-center justify-center opacity-40 text-center p-8 grayscale">
+                             <Library className="w-12 h-12 mb-4 text-[#0984E3]" />
+                             <p className="text-sm font-bold uppercase tracking-widest text-[#2D3436]">目前尚無文獻</p>
+                             <p className="text-xs text-[#636E72] mt-2">匯入文獻後，AI 在修正論文時將自動依照格式進行引用標註。</p>
+                          </div>
+                        ) : (
+                          references.map((ref, idx) => (
+                            <motion.div 
+                              key={idx}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              className="group flex items-start gap-4 p-4 bg-white border border-[#E2E8F0] rounded-2xl hover:border-[#0984E3]/30 hover:shadow-md transition-all relative overflow-hidden"
+                            >
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#0984E3] opacity-0 group-hover:opacity-100 transition-opacity" />
+                              <span className="flex-shrink-0 w-6 h-6 bg-[#F1F2F6] rounded-lg flex items-center justify-center text-[10px] font-bold text-[#636E72] group-hover:bg-[#0984E3]/10 group-hover:text-[#0984E3] transition-colors">
+                                {idx + 1}
+                              </span>
+                              <p className="flex-1 text-xs text-[#2D3436] leading-relaxed break-words font-medium">{ref}</p>
+                              <button 
+                                onClick={() => removeReference(idx)}
+                                className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 text-red-400 rounded-xl transition-all hover:text-red-600 active:scale-90"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </motion.div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col h-full overflow-hidden gap-6">
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 lg:p-8 shadow-sm flex flex-col">
+                     <div className="flex items-center gap-3 mb-6">
+                       <div className="p-3 bg-[#0984E3]/10 rounded-2xl">
+                         <ShieldCheck className="text-[#0984E3] w-6 h-6" />
+                       </div>
+                       <div>
+                         <h3 className="font-bold">引用規格預覽</h3>
+                         <p className="text-xs text-[#636E72] font-medium uppercase tracking-widest">當前選定的格式與提示</p>
+                       </div>
+                     </div>
+
+                     <div className="bg-[#F8F9FA] rounded-2xl p-6 space-y-6">
+                        <div>
+                          <label className="text-xs font-bold text-[#636E72] block mb-3 uppercase tracking-widest">引用格式規範 (Citation Style)</label>
+                          <select 
+                            value={citationStyle}
+                            onChange={(e) => setCitationStyle(e.target.value)}
+                            className="w-full bg-white border border-[#E2E8F0] h-12 rounded-xl px-4 text-sm font-bold shadow-sm focus:ring-2 focus:ring-[#0984E3] outline-none transition-all"
+                          >
+                            {['APA 7th', 'AMA', 'Vancouver', 'Harvard', 'MLA 9th', 'Chicago'].map(style => (
+                              <option key={style} value={style}>{style}</option>
+                            ))}
+                          </select>
+                          <div className="mt-3 p-3 bg-blue-50/50 border border-blue-100 rounded-xl">
+                            <p className="text-[10px] text-[#0984E3] font-bold flex items-center gap-1.5 uppercase tracking-wider">
+                              <Info className="w-3 h-3" /> 當前狀態
+                            </p>
+                            <p className="text-[10px] text-[#636E72] mt-1 italic">
+                              AI 在執行「投稿指引」或「審查修正」任務時，將主動檢查文中是否有符合此清單的內容，並自動依照 <strong>{citationStyle}</strong> 格式重新編排引文與列出參考文獻清單。
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="p-5 bg-white border border-[#E2E8F0] rounded-2xl shadow-sm">
+                          <h4 className="text-[11px] font-bold text-[#2D3436] mb-3 uppercase flex items-center gap-2">
+                             <TrendingUp className="w-3.5 h-3.5 text-[#00B894]" /> 提升效率的小技巧
+                          </h4>
+                          <ul className="space-y-3">
+                             <li className="flex gap-3">
+                               <div className="w-1.5 h-1.5 rounded-full bg-[#0984E3] mt-1 shrink-0" />
+                               <p className="text-[10px] text-[#636E72] leading-relaxed">
+                                 <strong>EndNote/Zotero 整合</strong>：將匯出的純文字清單（Plain Text）直接貼入批次匯入區，AI 會自動識別作者與年份。
+                               </p>
+                             </li>
+                             <li className="flex gap-3">
+                               <div className="w-1.5 h-1.5 rounded-full bg-[#0984E3] mt-1 shrink-0" />
+                               <p className="text-[10px] text-[#636E72] leading-relaxed">
+                                 <strong>自動補全引用</strong>：若您的論文草稿中有 (Author, Year) 標註但文末缺少列表，AI 會根據此管理清單自動補齊。
+                               </p>
+                             </li>
+                             <li className="flex gap-3">
+                               <div className="w-1.5 h-1.5 rounded-full bg-[#0984E3] mt-1 shrink-0" />
+                               <p className="text-[10px] text-[#636E72] leading-relaxed">
+                                 <strong>格式一致性</strong>：即使文獻來源格式混亂，AI 也會統一套用最新版的 <strong>{citationStyle}</strong> 標準。
+                               </p>
+                             </li>
+                          </ul>
+                        </div>
+                     </div>
                   </div>
                 </div>
               </motion.div>
@@ -940,7 +1131,7 @@ export default function App() {
               </motion.div>
             )}
 
-            {activeTab !== 'dashboard' && activeTab !== 'analytics' && (
+            {activeTab !== 'dashboard' && activeTab !== 'analytics' && activeTab !== 'bibliography' && (
               <motion.div
                 key="workspace"
                 initial={{ opacity: 0, scale: 0.98 }}
@@ -1134,31 +1325,45 @@ export default function App() {
                     </div>
                   </div>
 
-                  {(activeTab === 'guideline' || activeTab === 'revision') && (
+                  {(activeTab === 'condense' || activeTab === 'preparation' || activeTab === 'revision') && (
                     <div className="bg-white rounded-3xl border border-[#E2E8F0] p-6 shadow-sm shrink-0 min-h-[200px] flex flex-col">
                       <div className="flex items-center justify-between mb-4">
                         <label className="flex items-center gap-2 text-sm font-bold text-[#636E72] uppercase tracking-wider">
-                          {activeTab === 'guideline' ? <BookOpen className="w-4 h-4" /> : <MessageSquareQuote className="w-4 h-4" />}
-                          {activeTab === 'guideline' ? '期刊指引 (Author Guidelines)' : '審查者建議 (Reviewer Comments)'}
+                          {activeTab === 'condense' ? <FileText className="w-4 h-4" /> : activeTab === 'preparation' ? <BookOpen className="w-4 h-4" /> : <MessageSquareQuote className="w-4 h-4" />}
+                          {activeTab === 'condense' ? '濃縮需求 (Condense)' : activeTab === 'preparation' ? '投稿準備 (Preparation)' : '審查者建議 (Reviewer Comments)'}
                         </label>
                         
-                        {activeTab === 'guideline' && (
-                          <div className="flex items-center gap-2">
-                             <span className="text-[10px] font-bold text-[#636E72]">引用格式:</span>
-                             <select 
-                               value={citationStyle}
-                               onChange={(e) => setCitationStyle(e.target.value)}
-                               className="text-[10px] font-bold bg-[#F1F2F6] border border-[#E2E8F0] rounded-lg px-2 py-1 outline-none focus:ring-1 focus:ring-[#0984E3]"
-                             >
-                               {['APA 7th', 'AMA', 'Vancouver', 'Harvard', 'MLA 9th', 'Chicago'].map(style => (
-                                 <option key={style} value={style}>{style}</option>
-                               ))}
-                             </select>
+                        {(activeTab === 'condense' || activeTab === 'preparation') && (
+                          <div className="flex items-center gap-4">
+                             <div className="flex items-center gap-2">
+                               <span className="text-[10px] font-bold text-[#636E72]">目標字數:</span>
+                               <input 
+                                 type="text"
+                                 placeholder="如: 3000"
+                                 value={targetWordCount}
+                                 onChange={(e) => setTargetWordCount(e.target.value)}
+                                 className="text-[10px] font-bold bg-[#F1F2F6] border border-[#E2E8F0] rounded-lg px-2 py-1 outline-none w-16 focus:ring-1 focus:ring-[#0984E3]"
+                               />
+                             </div>
+                             {activeTab === 'preparation' && (
+                               <div className="flex items-center gap-2">
+                                 <span className="text-[10px] font-bold text-[#636E72]">引用格式:</span>
+                                 <select 
+                                   value={citationStyle}
+                                   onChange={(e) => setCitationStyle(e.target.value)}
+                                   className="text-[10px] font-bold bg-[#F1F2F6] border border-[#E2E8F0] rounded-lg px-2 py-1 outline-none focus:ring-1 focus:ring-[#0984E3]"
+                                 >
+                                   {['APA 7th', 'AMA', 'Vancouver', 'Harvard', 'MLA 9th', 'Chicago'].map(style => (
+                                     <option key={style} value={style}>{style}</option>
+                                   ))}
+                                 </select>
+                               </div>
+                             )}
                           </div>
                         )}
                       </div>
 
-                      {activeTab === 'guideline' && (
+                      {activeTab === 'preparation' && (
                         <div className="mb-4">
                           <div className="relative group/search">
                             <input 
@@ -1213,6 +1418,10 @@ export default function App() {
                                 <button
                                   onClick={() => {
                                     setSecondaryInput(journalResults.text);
+                                    if (journalResults.parsed) {
+                                      if (journalResults.parsed.wordCount) setTargetWordCount(journalResults.parsed.wordCount);
+                                      if (journalResults.parsed.citationStyle) setCitationStyle(journalResults.parsed.citationStyle);
+                                    }
                                     setJournalResults(null);
                                     setJournalQuery('');
                                   }}
@@ -1227,11 +1436,22 @@ export default function App() {
                       )}
 
                       <textarea
-                        placeholder={activeTab === 'guideline' ? "貼入該期刊的字數限制、格式要求等..." : "貼入審查專家的回饋建議..."}
+                        placeholder={activeTab === 'condense' ? "請輸入濃縮重點要求（或留空由 AI 自動識別）..." : activeTab === 'preparation' ? "貼入該期刊的字數限制、格式要求，或特定濃縮指令（如：請將 1 萬字學位論文濃縮為 4 千字投稿版本）..." : "貼入審查專家的回饋建議..."}
                         value={secondaryInput}
                         onChange={(e) => setSecondaryInput(e.target.value)}
                         className="w-full bg-[#F1F2F6] rounded-2xl p-4 text-sm min-h-[120px] focus:ring-2 focus:ring-[#0984E3] transition-all resize-none outline-none border-none font-sans"
                       />
+
+                      {(activeTab === 'condense' || activeTab === 'preparation') && (
+                        <div className="mt-2 p-3 bg-green-50 border border-green-100 rounded-xl">
+                          <p className="text-[10px] text-[#00B894] font-bold flex items-center gap-1.5 uppercase tracking-wider">
+                            <Zap className="w-3 h-3" /> 功能升級：數據表自動轉換
+                          </p>
+                          <p className="text-[10px] text-[#636E72] mt-1">
+                            AI 除了會確保論文結構完整（IMRAD），還會主動從「參考原稿」中識別統計數據並自動生成 <strong>Markdown 三線表格</strong> 插入文中。
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1288,7 +1508,7 @@ export default function App() {
                       >
                         <FileDown className="w-4 h-4" />
                       </button>
-                      {(activeTab === 'guideline' || activeTab === 'revision') && result && toneResult && (
+                      {(activeTab === 'preparation' || activeTab === 'revision') && result && toneResult && (
                         <button 
                           onClick={handleGenerateReport}
                           disabled={isGeneratingReport || isLocked}
